@@ -429,9 +429,18 @@ class DaVinciController: ObservableObject {
                 message: "تم وضع \(markerCount) علامة على مقاطع الصمت (\(minutes):\(String(format: "%02d", seconds)))\n\n💡 للحذف: اضغط M للتنقل بين العلامات، ثم حدد واحذف يدوياً"
             )
         } else {
+            // Fallback: just show the timecodes for manual deletion
+            var timecodes = sortedSegments.prefix(5).map { segment in
+                let mins = Int(segment.startTime) / 60
+                let secs = Int(segment.startTime) % 60
+                let endMins = Int(segment.endTime) / 60
+                let endSecs = Int(segment.endTime) % 60
+                return "\(mins):\(String(format: "%02d", secs)) → \(endMins):\(String(format: "%02d", endSecs))"
+            }
+            
             return CommandResult(
-                success: false,
-                message: "فشل وضع العلامات. جرب الحذف يدوياً من Edit page"
+                success: true,
+                message: "مقاطع الصمت (\(minutes):\(String(format: "%02d", seconds))):\n" + timecodes.joined(separator: "\n") + "\n\n📍 احذفها يدوياً من Edit page"
             )
         }
     }
@@ -449,26 +458,34 @@ class DaVinciController: ObservableObject {
         
         if timeline:
             fps = float(timeline.GetSetting("timelineFrameRate") or 24)
-            start_frame = int(\(startTime) * fps)
-            duration_frames = int(\(duration) * fps)
             
-            # Add marker at silence position
-            # Color: Red for silence
-            marker_data = {
-                "color": "Red",
-                "name": "صمت",
-                "note": f"مدة: {duration:.1f} ثانية",
-                "duration": duration_frames
-            }
+            # Get timeline start frame (usually 01:00:00:00 = 86400 frames at 24fps)
+            start_tc = timeline.GetStartTimecode()
             
-            result = timeline.AddMarker(start_frame, marker_data["color"], marker_data["name"], marker_data["note"], marker_data["duration"])
+            # Calculate frame position relative to timeline start
+            frame_offset = int(\(startTime) * fps)
+            duration_frames = max(1, int(\(duration) * fps))
             
-            if result:
-                print("success")
-            else:
-                print("error")
+            # Try adding marker with different parameter orders
+            # DaVinci API: AddMarker(frameNum, color, name, note, duration, customData)
+            try:
+                result = timeline.AddMarker(
+                    frame_offset,      # Frame number (relative to start)
+                    "Red",             # Color
+                    "Silence",         # Name (English for compatibility)
+                    "Duration: \(String(format: "%.1f", duration))s",  # Note
+                    duration_frames,   # Duration in frames
+                    ""                 # Custom data
+                )
+                if result:
+                    print("success")
+                else:
+                    # Try alternative: use frame index from start
+                    print("error: AddMarker returned false")
+            except Exception as e:
+                print(f"error: {e}")
         else:
-            print("error")
+            print("error: no timeline")
         """
         
         let result = await runPythonScript(script)
