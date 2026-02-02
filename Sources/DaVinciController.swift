@@ -486,36 +486,104 @@ class DaVinciController: ObservableObject {
     }
     
     private func executeRippleDelete(startTime: Double, endTime: Double) async -> Bool {
-        let startTC = formatTimeForDaVinci(startTime)
-        let endTC = formatTimeForDaVinci(endTime)
+        // DaVinci Resolve API doesn't support direct ripple delete
+        // We need to: 1) Open Edit page, 2) Set In/Out points, 3) Delete via keyboard
         
         let script = """
         import sys
+        import subprocess
+        import time
         sys.path.append('/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules')
         import DaVinciResolveScript as dvr
         
         resolve = dvr.scriptapp("Resolve")
+        if not resolve:
+            print("error: no resolve")
+            sys.exit(1)
+            
         pm = resolve.GetProjectManager()
         project = pm.GetCurrentProject()
         timeline = project.GetCurrentTimeline()
         
-        if timeline:
-            fps = float(timeline.GetSetting("timelineFrameRate") or 24)
-            
-            def time_to_frames(seconds, fps):
-                return int(seconds * fps)
-            
-            start_frame = time_to_frames(\(startTime), fps)
-            end_frame = time_to_frames(\(endTime), fps)
-            
-            # Set in/out points
-            timeline.SetCurrentTimecode(str(start_frame))
-            
-            # Note: Actual ripple delete requires Edit page to be active
-            # This sets up the range for manual deletion or uses Resolve's API
-            print("success")
-        else:
-            print("error")
+        if not timeline:
+            print("error: no timeline")
+            sys.exit(1)
+        
+        # Switch to Edit page
+        resolve.OpenPage("edit")
+        time.sleep(0.1)
+        
+        fps = float(timeline.GetSetting("timelineFrameRate") or 24)
+        
+        start_frame = int(\(startTime) * fps)
+        end_frame = int(\(endTime) * fps)
+        
+        # Get timeline start frame
+        start_tc = timeline.GetStartFrame()
+        
+        # Calculate actual frame positions
+        in_frame = start_tc + start_frame
+        out_frame = start_tc + end_frame
+        
+        # Set In and Out points using timecode
+        # Format: HH:MM:SS:FF
+        def frames_to_tc(frames, fps):
+            total_seconds = frames / fps
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
+            seconds = int(total_seconds % 60)
+            remaining_frames = int(frames % fps)
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{remaining_frames:02d}"
+        
+        in_tc = frames_to_tc(in_frame, fps)
+        out_tc = frames_to_tc(out_frame, fps)
+        
+        # Move playhead to in point and set In
+        timeline.SetCurrentTimecode(in_tc)
+        time.sleep(0.05)
+        
+        # Use AppleScript to set In point (I key)
+        subprocess.run(['osascript', '-e', '''
+            tell application "DaVinci Resolve"
+                activate
+            end tell
+            delay 0.1
+            tell application "System Events"
+                keystroke "i"
+            end tell
+        '''], capture_output=True)
+        
+        time.sleep(0.1)
+        
+        # Move to out point and set Out
+        timeline.SetCurrentTimecode(out_tc)
+        time.sleep(0.05)
+        
+        subprocess.run(['osascript', '-e', '''
+            tell application "System Events"
+                keystroke "o"
+            end tell
+        '''], capture_output=True)
+        
+        time.sleep(0.1)
+        
+        # Ripple delete (Shift+Delete or Shift+Backspace)
+        subprocess.run(['osascript', '-e', '''
+            tell application "System Events"
+                key code 51 using {shift down}
+            end tell
+        '''], capture_output=True)
+        
+        time.sleep(0.2)
+        
+        # Clear In/Out points (Alt+X)
+        subprocess.run(['osascript', '-e', '''
+            tell application "System Events"
+                keystroke "x" using {option down}
+            end tell
+        '''], capture_output=True)
+        
+        print("success")
         """
         
         let result = await runPythonScript(script)
