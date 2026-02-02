@@ -254,17 +254,39 @@ class DaVinciController: ObservableObject {
             print("error: لا يوجد Timeline مفتوح")
             sys.exit(1)
         
-        # Set render settings
-        project.SetCurrentRenderFormatAndCodec("\(format)", "")
+        # Get available presets
+        presets = project.GetRenderPresetList()
+        
+        # Try to find a suitable preset
+        target_preset = None
+        format_upper = "\(format)".upper()
+        
+        for preset in presets:
+            if format_upper in preset.upper():
+                target_preset = preset
+                break
+        
+        # If no matching preset, use first available or YouTube preset
+        if not target_preset:
+            for preset in presets:
+                if "YouTube" in preset or "1080" in preset:
+                    target_preset = preset
+                    break
+        
+        if not target_preset and presets:
+            target_preset = presets[0]
+        
+        if target_preset:
+            project.LoadRenderPreset(target_preset)
         
         # Set output path to Desktop
         desktop = os.path.expanduser("~/Desktop")
         project_name = project.GetName()
-        output_path = os.path.join(desktop, f"{project_name}_export.\(format)")
+        timeline_name = timeline.GetName()
         
         project.SetRenderSettings({
             "TargetDir": desktop,
-            "CustomName": f"{project_name}_export"
+            "CustomName": f"{timeline_name}_export"
         })
         
         # Add render job
@@ -273,15 +295,18 @@ class DaVinciController: ObservableObject {
         if job_id:
             # Start rendering
             project.StartRendering(job_id)
-            print(f"success: بدأ التصدير - {output_path}")
+            print(f"success: بدأ التصدير باستخدام preset: {target_preset}")
+            print(f"المسار: {desktop}/{timeline_name}_export")
         else:
-            print("error: فشل إنشاء مهمة التصدير")
+            # Show available presets for debugging
+            print(f"error: فشل إنشاء مهمة التصدير")
+            print(f"الـ Presets المتاحة: {presets[:5] if presets else 'لا يوجد'}")
         """
         
         let result = await runPythonScript(script)
         
         if result.contains("success") {
-            return CommandResult(success: true, message: "جاري التصدير إلى سطح المكتب بصيغة \(format.uppercased())")
+            return CommandResult(success: true, message: result.replacingOccurrences(of: "success: ", with: ""))
         } else {
             return CommandResult(success: false, message: "فشل التصدير: \(result)")
         }
