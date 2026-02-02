@@ -451,19 +451,34 @@ class DaVinciController: ObservableObject {
             print("")
             sys.exit(0)
         
-        # Get first video item in timeline
-        items = timeline.GetItemListInTrack("video", 1)
-        if items and len(items) > 0:
-            item = items[0]
-            media_pool_item = item.GetMediaPoolItem()
-            if media_pool_item:
-                clip_info = media_pool_item.GetClipProperty()
-                file_path = clip_info.get("File Path", "")
-                print(file_path)
-            else:
-                print("")
-        else:
-            print("")
+        file_path = ""
+        
+        # Try video tracks first (V1, V2, etc.)
+        for track_num in range(1, 5):
+            items = timeline.GetItemListInTrack("video", track_num)
+            if items and len(items) > 0:
+                item = items[0]
+                media_pool_item = item.GetMediaPoolItem()
+                if media_pool_item:
+                    clip_info = media_pool_item.GetClipProperty()
+                    file_path = clip_info.get("File Path", "")
+                    if file_path:
+                        break
+        
+        # If no video, try audio tracks (A1, A2, etc.)
+        if not file_path:
+            for track_num in range(1, 5):
+                items = timeline.GetItemListInTrack("audio", track_num)
+                if items and len(items) > 0:
+                    item = items[0]
+                    media_pool_item = item.GetMediaPoolItem()
+                    if media_pool_item:
+                        clip_info = media_pool_item.GetClipProperty()
+                        file_path = clip_info.get("File Path", "")
+                        if file_path:
+                            break
+        
+        print(file_path)
         """
         
         let result = await runPythonScript(script)
