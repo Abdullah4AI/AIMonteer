@@ -204,13 +204,13 @@ class DaVinciController: ObservableObject {
                     return int((hours * 3600 + minutes * 60 + seconds) * fps)
                 return 0
             
-            start_frame = time_to_frames("{start}", float(fps))
-            end_frame = time_to_frames("{end}", float(fps))
+            start_frame = time_to_frames("\(start)", float(fps))
+            end_frame = time_to_frames("\(end)", float(fps))
             
             # Set in/out points and perform razor cut
             timeline.SetCurrentTimecode(start_frame)
-            print(f"تم تحديد نقطة البداية عند {start}")
-            print(f"تم تحديد نقطة النهاية عند {end}")
+            print("تم تحديد نقطة البداية عند \(start)")
+            print("تم تحديد نقطة النهاية عند \(end)")
             print("success")
         else:
             print("error: لا يوجد timeline مفتوح")
