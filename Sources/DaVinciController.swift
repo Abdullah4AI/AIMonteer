@@ -406,30 +406,73 @@ class DaVinciController: ObservableObject {
             return CommandResult(success: true, message: "لا يوجد صمت للحذف")
         }
         
-        // Delete segments in reverse order (to preserve timecodes)
-        var deletedCount = 0
-        let sortedSegments = detectedSilenceSegments.sorted { $0.startTime > $1.startTime }
+        // Create markers at silence points for manual review
+        // Then provide instructions for deletion
+        let sortedSegments = detectedSilenceSegments.sorted { $0.startTime < $1.startTime }
         
+        // Add markers for each silence segment
+        var markerCount = 0
         for segment in sortedSegments {
-            let result = await executeRippleDelete(
-                startTime: segment.startTime,
-                endTime: segment.endTime
-            )
-            if result {
-                deletedCount += 1
-            }
+            let added = await addSilenceMarker(at: segment.startTime, duration: segment.duration)
+            if added { markerCount += 1 }
         }
         
-        let totalRemoved = silenceDetector.totalSilenceDuration(in: detectedSilenceSegments)
-        let minutes = Int(totalRemoved) / 60
-        let seconds = Int(totalRemoved) % 60
+        let totalSilence = silenceDetector.totalSilenceDuration(in: detectedSilenceSegments)
+        let minutes = Int(totalSilence) / 60
+        let seconds = Int(totalSilence) % 60
         
         detectedSilenceSegments.removeAll()
         
-        return CommandResult(
-            success: true,
-            message: "تم حذف \(deletedCount) مقطع صمت (وفرت \(minutes):\(String(format: "%02d", seconds)) من الفيديو)"
-        )
+        if markerCount > 0 {
+            return CommandResult(
+                success: true,
+                message: "تم وضع \(markerCount) علامة على مقاطع الصمت (\(minutes):\(String(format: "%02d", seconds)))\n\n💡 للحذف: اضغط M للتنقل بين العلامات، ثم حدد واحذف يدوياً"
+            )
+        } else {
+            return CommandResult(
+                success: false,
+                message: "فشل وضع العلامات. جرب الحذف يدوياً من Edit page"
+            )
+        }
+    }
+    
+    private func addSilenceMarker(at startTime: Double, duration: Double) async -> Bool {
+        let script = """
+        import sys
+        sys.path.append('/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules')
+        import DaVinciResolveScript as dvr
+        
+        resolve = dvr.scriptapp("Resolve")
+        pm = resolve.GetProjectManager()
+        project = pm.GetCurrentProject()
+        timeline = project.GetCurrentTimeline()
+        
+        if timeline:
+            fps = float(timeline.GetSetting("timelineFrameRate") or 24)
+            start_frame = int(\(startTime) * fps)
+            duration_frames = int(\(duration) * fps)
+            
+            # Add marker at silence position
+            # Color: Red for silence
+            marker_data = {
+                "color": "Red",
+                "name": "صمت",
+                "note": f"مدة: {duration:.1f} ثانية",
+                "duration": duration_frames
+            }
+            
+            result = timeline.AddMarker(start_frame, marker_data["color"], marker_data["name"], marker_data["note"], marker_data["duration"])
+            
+            if result:
+                print("success")
+            else:
+                print("error")
+        else:
+            print("error")
+        """
+        
+        let result = await runPythonScript(script)
+        return result.contains("success")
     }
     
     private func getCurrentMediaPath() async -> String? {
