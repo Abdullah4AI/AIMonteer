@@ -406,42 +406,150 @@ class DaVinciController: ObservableObject {
             return CommandResult(success: true, message: "لا يوجد صمت للحذف")
         }
         
-        // Create markers at silence points for manual review
-        // Then provide instructions for deletion
-        let sortedSegments = detectedSilenceSegments.sorted { $0.startTime < $1.startTime }
-        
-        // Add markers for each silence segment
-        var markerCount = 0
-        for segment in sortedSegments {
-            let added = await addSilenceMarker(at: segment.startTime, duration: segment.duration)
-            if added { markerCount += 1 }
-        }
+        // Sort segments in REVERSE order (delete from end first to preserve timecodes)
+        let sortedSegments = detectedSilenceSegments.sorted { $0.startTime > $1.startTime }
         
         let totalSilence = silenceDetector.totalSilenceDuration(in: detectedSilenceSegments)
         let minutes = Int(totalSilence) / 60
         let seconds = Int(totalSilence) % 60
         
+        // Perform automatic deletion using AppleScript
+        var deletedCount = 0
+        for segment in sortedSegments {
+            let success = await performAutomaticDelete(start: segment.startTime, end: segment.endTime)
+            if success {
+                deletedCount += 1
+            }
+            // Small delay between deletions
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+        }
+        
         detectedSilenceSegments.removeAll()
         
-        if markerCount > 0 {
+        if deletedCount > 0 {
             return CommandResult(
                 success: true,
-                message: "تم وضع \(markerCount) علامة على مقاطع الصمت (\(minutes):\(String(format: "%02d", seconds)))\n\n💡 للحذف: اضغط M للتنقل بين العلامات، ثم حدد واحذف يدوياً"
+                message: "تم حذف \(deletedCount) من \(sortedSegments.count) مقطع صمت (وفرت \(minutes):\(String(format: "%02d", seconds)))"
             )
         } else {
-            // Fallback: just show the timecodes for manual deletion
-            var timecodes = sortedSegments.prefix(5).map { segment in
-                let mins = Int(segment.startTime) / 60
-                let secs = Int(segment.startTime) % 60
-                let endMins = Int(segment.endTime) / 60
-                let endSecs = Int(segment.endTime) % 60
-                return "\(mins):\(String(format: "%02d", secs)) → \(endMins):\(String(format: "%02d", endSecs))"
-            }
-            
             return CommandResult(
-                success: true,
-                message: "مقاطع الصمت (\(minutes):\(String(format: "%02d", seconds))):\n" + timecodes.joined(separator: "\n") + "\n\n📍 احذفها يدوياً من Edit page"
+                success: false,
+                message: "فشل الحذف التلقائي.\n\n⚠️ تأكد من:\n1. DaVinci مفتوح على Edit page\n2. التطبيق مضاف في Accessibility"
             )
+        }
+    }
+    
+    /// Performs automatic deletion using AppleScript keyboard control
+    private func performAutomaticDelete(start: Double, end: Double) async -> Bool {
+        // Combined Python + AppleScript approach
+        let script = """
+        import sys
+        import subprocess
+        import time
+        sys.path.append('/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules')
+        import DaVinciResolveScript as dvr
+        
+        resolve = dvr.scriptapp("Resolve")
+        if not resolve:
+            print("error: no resolve")
+            sys.exit(1)
+        
+        # Switch to Edit page
+        resolve.OpenPage("edit")
+        time.sleep(0.3)
+        
+        pm = resolve.GetProjectManager()
+        project = pm.GetCurrentProject()
+        timeline = project.GetCurrentTimeline()
+        
+        if not timeline:
+            print("error: no timeline")
+            sys.exit(1)
+        
+        fps = float(timeline.GetSetting("timelineFrameRate") or 24)
+        
+        # Convert time to timecode string HH:MM:SS:FF
+        def seconds_to_tc(secs, fps):
+            total_frames = int(secs * fps)
+            ff = int(total_frames % fps)
+            total_secs = int(secs)
+            ss = total_secs % 60
+            mm = (total_secs // 60) % 60
+            hh = total_secs // 3600
+            return f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
+        
+        start_tc = seconds_to_tc(\(start), fps)
+        end_tc = seconds_to_tc(\(end), fps)
+        
+        # Move playhead to START and press I (In point)
+        timeline.SetCurrentTimecode(start_tc)
+        time.sleep(0.15)
+        
+        # Press I for In point
+        subprocess.run(['osascript', '-e', '''
+            tell application "System Events"
+                keystroke "i"
+            end tell
+        '''], capture_output=True)
+        time.sleep(0.15)
+        
+        # Move playhead to END and press O (Out point)
+        timeline.SetCurrentTimecode(end_tc)
+        time.sleep(0.15)
+        
+        # Press O for Out point
+        subprocess.run(['osascript', '-e', '''
+            tell application "System Events"
+                keystroke "o"
+            end tell
+        '''], capture_output=True)
+        time.sleep(0.15)
+        
+        # Press Shift+Backspace for Ripple Delete
+        subprocess.run(['osascript', '-e', '''
+            tell application "System Events"
+                key code 51 using {shift down}
+            end tell
+        '''], capture_output=True)
+        time.sleep(0.2)
+        
+        # Clear In/Out with Option+X
+        subprocess.run(['osascript', '-e', '''
+            tell application "System Events"
+                keystroke "x" using {option down}
+            end tell
+        '''], capture_output=True)
+        
+        print("success")
+        """
+        
+        let result = await runPythonScript(script)
+        return result.contains("success")
+    }
+    
+    /// Run AppleScript and return result
+    private func runAppleScript(_ script: String) async -> String {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                process.arguments = ["-e", script]
+                
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+                
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8) ?? ""
+                    continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
+                } catch {
+                    continuation.resume(returning: "error: \(error.localizedDescription)")
+                }
+            }
         }
     }
     
