@@ -267,18 +267,51 @@ class DaVinciController: ObservableObject {
     
     // MARK: - Python Execution
     
+    private nonisolated func findPythonPath() -> String {
+        // DaVinci Resolve 18+ requires Python 3.10+
+        // Try paths in order of preference
+        let pythonPaths = [
+            "/opt/homebrew/bin/python3",      // Homebrew (ARM Mac)
+            "/usr/local/bin/python3",          // Homebrew (Intel Mac)
+            "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+            "/usr/bin/python3"                 // System fallback (may not work)
+        ]
+        
+        for path in pythonPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+        return "/usr/bin/python3"
+    }
+    
     private func runPythonScript(_ script: String) async -> String {
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                let pythonPath = self.findPythonPath()
+                process.executableURL = URL(fileURLWithPath: pythonPath)
                 process.arguments = ["-c", script]
                 
                 // Set environment variables required for DaVinci Resolve scripting
                 var env = ProcessInfo.processInfo.environment
-                env["RESOLVE_SCRIPT_API"] = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
-                env["RESOLVE_SCRIPT_LIB"] = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
-                env["PYTHONPATH"] = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
+                
+                // Paths for DaVinci Resolve scripting API
+                let scriptAPI = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+                let modulesPath = "\(scriptAPI)/Modules"
+                
+                // fusionscript location varies by version - try both
+                let fusionLibPaths = [
+                    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so",
+                    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/libfusionscript.dylib"
+                ]
+                let fusionLib = fusionLibPaths.first { FileManager.default.fileExists(atPath: $0) } ?? fusionLibPaths[0]
+                
+                env["RESOLVE_SCRIPT_API"] = scriptAPI
+                env["RESOLVE_SCRIPT_LIB"] = fusionLib
+                env["PYTHONPATH"] = modulesPath
+                env["DYLD_LIBRARY_PATH"] = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion"
                 process.environment = env
                 
                 let pipe = Pipe()
