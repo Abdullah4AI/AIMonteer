@@ -54,6 +54,24 @@ struct ContentView: View {
             
             Spacer()
             
+            // Quick Actions
+            if davinciController.isConnected {
+                Button(action: analyzeCurrentVideo) {
+                    HStack(spacing: 4) {
+                        if davinciController.isAnalyzing {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        } else {
+                            Image(systemName: "waveform.badge.magnifyingglass")
+                        }
+                        Text("كشف الصمت")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(davinciController.isAnalyzing)
+            }
+            
             // Connection Status
             HStack(spacing: 6) {
                 Circle()
@@ -76,6 +94,11 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    // Silence segments preview (if any)
+                    if !davinciController.detectedSilenceSegments.isEmpty {
+                        silenceSegmentsView
+                    }
+                    
                     ForEach(output) { message in
                         MessageBubble(message: message)
                             .id(message.id)
@@ -92,6 +115,42 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Silence Segments View
+    private var silenceSegmentsView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "waveform.slash")
+                    .foregroundColor(.orange)
+                Text("مقاطع الصمت المكتشفة (\(davinciController.detectedSilenceSegments.count))")
+                    .font(.headline)
+                
+                Spacer()
+                
+                Button(action: removeSilenceSegments) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "trash")
+                        Text("حذف الكل")
+                    }
+                    .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(isProcessing)
+            }
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(davinciController.detectedSilenceSegments) { segment in
+                        SilenceSegmentCard(segment: segment)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color.orange.opacity(0.1))
+        .cornerRadius(12)
     }
     
     // MARK: - Command Input
@@ -158,6 +217,24 @@ struct ContentView: View {
     private func addOutput(_ text: String, type: MessageType) {
         let message = OutputMessage(text: text, type: type)
         output.append(message)
+    }
+    
+    private func analyzeCurrentVideo() {
+        Task {
+            addOutput("جاري تحليل الفيديو لكشف الصمت...", type: .system)
+            let result = await davinciController.executeCommand("حلل الصمت")
+            addOutput(result.message, type: result.success ? .assistant : .error)
+        }
+    }
+    
+    private func removeSilenceSegments() {
+        Task {
+            isProcessing = true
+            addOutput("جاري حذف مقاطع الصمت...", type: .system)
+            let result = await davinciController.executeCommand("احذف الصمت")
+            addOutput(result.message, type: result.success ? .assistant : .error)
+            isProcessing = false
+        }
     }
 }
 
@@ -238,5 +315,31 @@ struct MessageBubble: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: message.timestamp)
+    }
+}
+
+// MARK: - Silence Segment Card
+
+struct SilenceSegmentCard: View {
+    let segment: SilenceDetector.SilenceSegment
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "waveform.slash")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                Text(String(format: "%.1f ث", segment.duration))
+                    .font(.caption)
+                    .fontWeight(.semibold)
+            }
+            
+            Text("\(segment.startTimecode) → \(segment.endTimecode)")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(8)
+        .background(Color(.controlBackgroundColor))
+        .cornerRadius(8)
     }
 }
