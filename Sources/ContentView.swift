@@ -5,6 +5,9 @@ struct ContentView: View {
     @State private var output: [OutputMessage] = []
     @State private var isProcessing: Bool = false
     @StateObject private var davinciController = DaVinciController()
+    @FocusState private var isTextFieldFocused: Bool
+    
+    private var connectionCheckTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     
     var body: some View {
         VStack(spacing: 0) {
@@ -21,9 +24,20 @@ struct ContentView: View {
             // Command Input
             commandInputView
         }
+        .frame(minWidth: 500, minHeight: 400)
         .background(Color(.windowBackgroundColor))
         .onAppear {
             checkDaVinciConnection()
+            // Activate app and focus text field
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NSApp.activate(ignoringOtherApps: true)
+                isTextFieldFocused = true
+            }
+        }
+        .onReceive(connectionCheckTimer) { _ in
+            Task {
+                await davinciController.checkConnection()
+            }
         }
     }
     
@@ -89,10 +103,11 @@ struct ContentView: View {
                 .padding(12)
                 .background(Color(.controlBackgroundColor))
                 .cornerRadius(10)
+                .focused($isTextFieldFocused)
                 .onSubmit {
                     executeCommand()
                 }
-                .disabled(isProcessing)
+                .disabled(isProcessing || !davinciController.isConnected)
             
             Button(action: executeCommand) {
                 if isProcessing {
@@ -105,7 +120,7 @@ struct ContentView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(command.isEmpty || isProcessing)
+            .disabled(command.isEmpty || isProcessing || !davinciController.isConnected)
             .keyboardShortcut(.return, modifiers: .command)
         }
         .padding()
@@ -124,7 +139,7 @@ struct ContentView: View {
     }
     
     private func executeCommand() {
-        guard !command.isEmpty else { return }
+        guard !command.isEmpty, davinciController.isConnected else { return }
         
         let userCommand = command
         addOutput(userCommand, type: .user)
@@ -135,6 +150,8 @@ struct ContentView: View {
             let result = await davinciController.executeCommand(userCommand)
             addOutput(result.message, type: result.success ? .assistant : .error)
             isProcessing = false
+            // Re-focus text field after command
+            isTextFieldFocused = true
         }
     }
     
@@ -223,5 +240,3 @@ struct MessageBubble: View {
         return formatter.string(from: message.timestamp)
     }
 }
-
-// Preview requires Xcode, removed for SPM build
