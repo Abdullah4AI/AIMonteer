@@ -38,21 +38,39 @@ class DaVinciController: ObservableObject {
         // Test Python scripting connection
         let script = """
         import sys
-        sys.path.append('/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules')
+        import os
+        
+        # Add module path
+        module_path = '/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules'
+        if module_path not in sys.path:
+            sys.path.append(module_path)
+        
         try:
             import DaVinciResolveScript as dvr
+        except ImportError as e:
+            print(f"import_error: {e}")
+            sys.exit(1)
+        
+        try:
             resolve = dvr.scriptapp("Resolve")
-            if resolve:
-                pm = resolve.GetProjectManager()
-                if pm:
-                    print("connected")
-                    exit(0)
+            if resolve is None:
+                print("error: scriptapp returned None - check if Resolve is running and scripting is enabled")
+                sys.exit(1)
+            
+            pm = resolve.GetProjectManager()
+            if pm is None:
+                print("error: GetProjectManager returned None")
+                sys.exit(1)
+            
+            print("connected")
+            sys.exit(0)
         except Exception as e:
             print(f"error: {e}")
-        exit(1)
+            sys.exit(1)
         """
         
         let result = await runPythonScript(script)
+        print("DaVinci connection test result: \(result)")  // Debug logging
         return result.contains("connected")
     }
     
@@ -256,16 +274,33 @@ class DaVinciController: ObservableObject {
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
                 process.arguments = ["-c", script]
                 
+                // Set environment variables required for DaVinci Resolve scripting
+                var env = ProcessInfo.processInfo.environment
+                env["RESOLVE_SCRIPT_API"] = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+                env["RESOLVE_SCRIPT_LIB"] = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+                env["PYTHONPATH"] = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules"
+                process.environment = env
+                
                 let pipe = Pipe()
+                let errorPipe = Pipe()
                 process.standardOutput = pipe
-                process.standardError = pipe
+                process.standardError = errorPipe
                 
                 do {
                     try process.run()
                     process.waitUntilExit()
                     
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let output = String(data: data, encoding: .utf8) ?? ""
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    
+                    var output = String(data: data, encoding: .utf8) ?? ""
+                    let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+                    
+                    // Include error output for debugging if main output is empty
+                    if output.isEmpty && !errorOutput.isEmpty {
+                        output = "error: \(errorOutput)"
+                    }
+                    
                     continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
                 } catch {
                     continuation.resume(returning: "error: \(error.localizedDescription)")
