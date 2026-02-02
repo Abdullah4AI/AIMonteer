@@ -1,11 +1,21 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+enum EditorMode: String, CaseIterable {
+    case davinci = "DaVinci Resolve"
+    case finalcut = "Final Cut Pro"
+}
 
 struct ContentView: View {
     @State private var command: String = ""
     @State private var output: [OutputMessage] = []
     @State private var isProcessing: Bool = false
     @StateObject private var davinciController = DaVinciController()
+    @StateObject private var fcpxmlController = FCPXMLController()
     @FocusState private var isTextFieldFocused: Bool
+    @State private var editorMode: EditorMode = .finalcut
+    @State private var showingFileImporter = false
+    @State private var selectedFCPXMLURL: URL?
     
     private var connectionCheckTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     
@@ -35,8 +45,51 @@ struct ContentView: View {
             }
         }
         .onReceive(connectionCheckTimer) { _ in
-            Task {
-                await davinciController.checkConnection()
+            if editorMode == .davinci {
+                Task {
+                    await davinciController.checkConnection()
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $showingFileImporter,
+            allowedContentTypes: [UTType(filenameExtension: "fcpxml") ?? .xml],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    selectedFCPXMLURL = url
+                    processFCPXML(url: url)
+                }
+            case .failure(let error):
+                addOutput("خطأ في فتح الملف: \(error.localizedDescription)", type: .error)
+            }
+        }
+    }
+    
+    // MARK: - FCPXML Processing
+    private func processFCPXML(url: URL) {
+        addOutput("جاري معالجة: \(url.lastPathComponent)", type: .system)
+        
+        Task {
+            // Create output URL
+            let outputURL = url.deletingLastPathComponent()
+                .appendingPathComponent(url.deletingPathExtension().lastPathComponent + "_no_silence")
+                .appendingPathExtension("fcpxml")
+            
+            let success = await fcpxmlController.processAndRemoveSilence(
+                fcpxmlURL: url,
+                outputURL: outputURL
+            )
+            
+            await MainActor.run {
+                if success {
+                    addOutput(fcpxmlController.statusMessage, type: .assistant)
+                    addOutput("استورد الملف المعدل في Final Cut Pro:\nFile → Import → XML...", type: .system)
+                } else {
+                    addOutput(fcpxmlController.statusMessage, type: .error)
+                }
             }
         }
     }
@@ -54,8 +107,26 @@ struct ContentView: View {
             
             Spacer()
             
-            // Quick Actions
-            if davinciController.isConnected {
+            // Editor Mode Picker
+            Picker("", selection: $editorMode) {
+                ForEach(EditorMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 200)
+            
+            // Quick Actions based on mode
+            if editorMode == .finalcut {
+                Button(action: { showingFileImporter = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.badge.plus")
+                        Text("استيراد FCPXML")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.bordered)
+            } else if davinciController.isConnected {
                 Button(action: analyzeCurrentVideo) {
                     HStack(spacing: 4) {
                         if davinciController.isAnalyzing {
@@ -72,19 +143,34 @@ struct ContentView: View {
                 .disabled(davinciController.isAnalyzing)
             }
             
-            // Connection Status
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(davinciController.isConnected ? Color.green : Color.red)
-                    .frame(width: 8, height: 8)
-                Text(davinciController.isConnected ? "DaVinci متصل" : "غير متصل")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            // Connection Status (only for DaVinci mode)
+            if editorMode == .davinci {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(davinciController.isConnected ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(davinciController.isConnected ? "DaVinci متصل" : "غير متصل")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(.controlBackgroundColor))
+                .cornerRadius(8)
+            } else {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.blue)
+                        .frame(width: 8, height: 8)
+                    Text("Final Cut Pro")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(.controlBackgroundColor))
+                .cornerRadius(8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color(.controlBackgroundColor))
-            .cornerRadius(8)
         }
         .padding()
     }
