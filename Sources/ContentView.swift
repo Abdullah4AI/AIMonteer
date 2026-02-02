@@ -1,6 +1,18 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Custom UTTypes
+
+extension UTType {
+    static var fcpxml: UTType {
+        UTType(filenameExtension: "fcpxml", conformingTo: .xml) ?? .xml
+    }
+    
+    static var fcpxmld: UTType {
+        UTType(filenameExtension: "fcpxmld", conformingTo: .package) ?? .package
+    }
+}
+
 enum EditorMode: String, CaseIterable {
     case davinci = "DaVinci Resolve"
     case finalcut = "Final Cut Pro"
@@ -53,7 +65,7 @@ struct ContentView: View {
         }
         .fileImporter(
             isPresented: $showingFileImporter,
-            allowedContentTypes: [UTType(filenameExtension: "fcpxml") ?? .xml],
+            allowedContentTypes: [.fcpxml, .fcpxmld],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -73,13 +85,21 @@ struct ContentView: View {
         addOutput("جاري معالجة: \(url.lastPathComponent)", type: .system)
         
         Task {
+            // Handle .fcpxmld bundles (XML is inside as Info.fcpxml)
+            let xmlURL: URL
+            if url.pathExtension == "fcpxmld" {
+                xmlURL = url.appendingPathComponent("Info.fcpxml")
+            } else {
+                xmlURL = url
+            }
+            
             // Create output URL
-            let outputURL = url.deletingLastPathComponent()
+            let outputURL = xmlURL.deletingLastPathComponent()
                 .appendingPathComponent(url.deletingPathExtension().lastPathComponent + "_no_silence")
                 .appendingPathExtension("fcpxml")
             
             let success = await fcpxmlController.processAndRemoveSilence(
-                fcpxmlURL: url,
+                fcpxmlURL: xmlURL,
                 outputURL: outputURL
             )
             
