@@ -235,7 +235,56 @@ class DaVinciController: ObservableObject {
     }
     
     private func executeExport(format: String) async -> CommandResult {
-        return CommandResult(success: true, message: "جاري التصدير بصيغة \(format.uppercased())...")
+        let script = """
+        import sys
+        import os
+        sys.path.append('/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules')
+        import DaVinciResolveScript as dvr
+        
+        resolve = dvr.scriptapp("Resolve")
+        pm = resolve.GetProjectManager()
+        project = pm.GetCurrentProject()
+        
+        if not project:
+            print("error: لا يوجد مشروع مفتوح")
+            sys.exit(1)
+        
+        timeline = project.GetCurrentTimeline()
+        if not timeline:
+            print("error: لا يوجد Timeline مفتوح")
+            sys.exit(1)
+        
+        # Set render settings
+        project.SetCurrentRenderFormatAndCodec("\(format)", "")
+        
+        # Set output path to Desktop
+        desktop = os.path.expanduser("~/Desktop")
+        project_name = project.GetName()
+        output_path = os.path.join(desktop, f"{project_name}_export.\(format)")
+        
+        project.SetRenderSettings({
+            "TargetDir": desktop,
+            "CustomName": f"{project_name}_export"
+        })
+        
+        # Add render job
+        job_id = project.AddRenderJob()
+        
+        if job_id:
+            # Start rendering
+            project.StartRendering(job_id)
+            print(f"success: بدأ التصدير - {output_path}")
+        else:
+            print("error: فشل إنشاء مهمة التصدير")
+        """
+        
+        let result = await runPythonScript(script)
+        
+        if result.contains("success") {
+            return CommandResult(success: true, message: "جاري التصدير إلى سطح المكتب بصيغة \(format.uppercased())")
+        } else {
+            return CommandResult(success: false, message: "فشل التصدير: \(result)")
+        }
     }
     
     private func getProjectInfo() async -> CommandResult {
