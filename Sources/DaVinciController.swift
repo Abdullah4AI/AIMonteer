@@ -534,13 +534,23 @@ class DaVinciController: ObservableObject {
     
     private nonisolated func findPythonPath() -> String {
         // DaVinci Resolve 18+ requires Python 3.10+
-        // Try paths in order of preference
+        // IMPORTANT: Python 3.14 crashes with DaVinci Resolve - use 3.10-3.13
+        // Try paths in order of preference (most stable first)
         let pythonPaths = [
-            "/opt/homebrew/bin/python3",      // Homebrew (ARM Mac)
-            "/usr/local/bin/python3",          // Homebrew (Intel Mac)
+            "/opt/homebrew/bin/python3.10",    // Homebrew Python 3.10 (most compatible)
+            "/opt/homebrew/bin/python3.11",    // Homebrew Python 3.11
+            "/opt/homebrew/bin/python3.12",    // Homebrew Python 3.12
+            "/opt/homebrew/bin/python3.13",    // Homebrew Python 3.13 (stable)
             "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3",
             "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+            "/usr/local/bin/python3.10",       // Intel Mac Homebrew
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/python3.12",
+            "/usr/local/bin/python3.13",
             "/usr/bin/python3"                 // System fallback (may not work)
+            // NOTE: Intentionally NOT including python3.14 - causes SIGSEGV crashes
         ]
         
         for path in pythonPaths {
@@ -548,7 +558,7 @@ class DaVinciController: ObservableObject {
                 return path
             }
         }
-        return "/usr/bin/python3"
+        return "/opt/homebrew/bin/python3.13"  // Default to 3.13 if nothing found
     }
     
     private func runPythonScript(_ script: String) async -> String {
